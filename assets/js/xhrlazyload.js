@@ -49,23 +49,9 @@ var $XLL = (function () {
 					return new window.XMLHttpRequest();
 				};
 			} else if (typeof window.ActiveXObject !== 'undefined') {
-				if (window.ActiveXObject('Msxml2.XMLHTTP.6.0')) {
-					return function () {
-						return new window.ActiveXObject('Msxml2.XMLHTTP.6.0');
-					};
-				} else if (window.ActiveXObject('Msxml2.XMLHTTP.3.0')) {
-					return function () {
-						return new window.ActiveXObject('Msxml2.XMLHTTP.3.0');
-					};
-				} else if (window.ActiveXObject('Msxml2.XMLHTTP')) {
-					return function () {
-						return new window.ActiveXObject('Msxml2.XMLHTTP');
-					};
-				} else {
-					return function () {
-						return false;
-					};
-				}
+				return function () {
+					return new window.ActiveXObject('Microsoft.XMLHTTP');
+				};
 			} else {
 				return function () {
 					return false;
