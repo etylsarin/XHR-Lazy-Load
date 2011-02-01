@@ -8,11 +8,11 @@
 </head>
 <body>
 	<h1>XHR Lazy Load example page</h1>
-	<script type="text/javascript" src="assets/js/xhrlazyload-0.2.9.min.js"></script>
+	<script type="text/javascript" src="assets/js/xhrlazyload.js"></script>
 	<script type="text/javascript">
 		if (typeof $XLL === 'object') {
 			$XLL.load({src : 'http://ajax.googleapis.com/ajax/libs/jquery/1.4/jquery.min.js', fixOrder: true, ajax: false, callback: function () {alert('jquery.min.js callback works!');}, error: function () {alert('jquery.min.js loading error occured!');}})
-				.load({src : 'assets/css/core.css', type: 'css', attributes: {media: 'all'}, callback: function () {alert('core.css callback works!');}, error: function () {alert('core.css loading error occured!');}})
+				.load({src : 'assets/css/core.cssx', type: 'css', attributes: {media: 'all'}, callback: function () {alert('core.css callback works!');}, error: function () {alert('core.css loading error occured!');}})
 				.load({src : 'assets/js/js01.js', callback: function () {js01('js01 callback works!');}, error: function () {alert('js01.js loading error occured!');}})
 				.load({src : 'assets/js/js02.js', callback: function () {js02('js02 callback works!');}, error: function () {alert('js02.js loading error occured!');}})
 				.load({src : 'assets/js/js03.js', callback: function () {js03('js03 callback works!');}, error: function () {alert('js03.js loading error occured!');}});
