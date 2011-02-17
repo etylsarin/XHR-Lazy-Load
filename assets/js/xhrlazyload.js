@@ -147,11 +147,11 @@ var $XLL = (function (window) {
 						customKeys = [],
 						setProtoValue = function (obj, custom) {
 							for (var propertyName in obj) {
-								if (pub.hasOwnProperty(propertyName)) {
+								if (obj.hasOwnProperty(propertyName)) {
 									if (custom) {
 										customKeys.push(propertyName);
 									}
-									returnObj[propertyName] = pub[propertyName];
+									returnObj[propertyName] = obj[propertyName];
 								}
 							}
 						};
@@ -645,12 +645,13 @@ var $XLL = (function (window) {
 		};
 
 	// -- One-time init procedures ---------------------------------------------
-	(function (customProperties) {
-		customProperties.pvt.load = load;
-		extendCustomObject(customProperties.pub, customProperties.pvt);
-		globalQueue.queuePush = queuePush;
-		globalQueue.queuePop = queuePop;
-	}(customProperties));
+
+	// bind the load method to the properties object
+	customProperties.pvt.load = load;
+	// first run of the extend custom object method which sets up default values and rewrite the function for a later use
+	extendCustomObject(customProperties.pub, customProperties.pvt);
+	globalQueue.queuePush = queuePush;
+	globalQueue.queuePop = queuePop;
 
 	// -- Public API -----------------------------------------------------------
 	return {
