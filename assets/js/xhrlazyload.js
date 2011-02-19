@@ -1,6 +1,6 @@
 /**
  * @fileoverview xhr lazy loading script
- * @version 0.4.0 (10-FEB-2011)
+ * @version 0.5.0 (10-FEB-2011)
  * @author Filip Mares - http:// www.filip-mares.co.uk/
  *
  * Dual licensed under the MIT and GPL licenses:
@@ -19,22 +19,22 @@ Parameters and their values are optional
 	$XLL.load({
 		src: 'myScript.js', //required attribute, source file to be lazy loaded
 		type: 'js', //optional attribute, 'js' by default, other possible value is 'css'
-		fixOrder: true, //optional attribute, false by default, when set to true loading order of the related file is preserved
+		async: false, //optional attribute, true by default, when set to true loading order of the related file is preserved
 		ajax: false, //optional attribute, true by default, decides if the source file is loaded by xhr
 		attributes: {id: 'myFile'}, //optional attribute, undefined by default, allows user to add specific attributes to assets
-		// allowed attributes for script tag: id
+		// allowed attributes for script tag: id, type, charset
 		// allowed attributes for link or style tag: id, media, title
 		timeout: 5000, //optional attribute, 5 seconds by default, after the period fires error event so the rest of the queue can be processed
-		callback: myCallbackFunction //optional attribute, callback function executed if the loading proces is successful
+		success: myCallbackFunction //optional attribute, callback function executed if the loading proces is successful
 		error: myErrorFunction //optional attribute, error function executed if the loading proces is unsuccessful
 	})
-	$XLL.exec({
-		fixOrder: true, //optional attribute, false by default, when set to true loading order of the related file is preserved
-		callback: myCallbackFunction //optional attribute, callback function to be executed
+	$XLL.wait({
+		async: true, //optional attribute, false by default, when set to true loading order of the related file is preserved
+		success: myCallbackFunction //optional attribute, callback function to be executed
 	})
 */
 
-var $XLL = (function (window) {
+var $XLL = (function (global) {
 
 	// -- Private properties ---------------------------------------------------
 
@@ -43,159 +43,81 @@ var $XLL = (function (window) {
 		FALSE = false,
 		NULL = null,
 		// local pointer to the document element
-		document = window.document,
-		// define which attributes could be applied for js and css files
-		customAttributes = {
-			js: ['id'],
-			css: ['id', 'media', 'title']
-		},
+		document = global.document,
 		// define the custom properties set with default values
-		customProperties = {
-			// define public ones which could be reset by user settings
-			pub: {
-				src: '',
-				type: 'js',
-				fixOrder: FALSE,
-				ajax: TRUE,
-				attributes: NULL,
-				timeout: 5000,
-				callback: function(){},
-				error: function(){}
+		customDefaults = {
+			src: '',
+			type: 'script',
+			async: TRUE,
+			ajax: TRUE,
+			attributes: {
+				id: '',
+				type: 'text/javascript',
+				charset: '',
+				media: '',
+				title: ''
 			},
-			// define private ones which are just for internal use
-			pvt: {
-				loadError: 0,
-				processed: 0,
-				index: 0,
-				content: '',
-				node: NULL
-			}
+			timeout: 5000,
+			callback: function(){},
+			error: function(){},
+			// set a default limit for AJAX paralel downloads
+			asyncAjaxDownloads: 4
 		},
-		// create a global queue object and set up it's default values
-		globalQueue = {
+		// create a queue object and set up it's default values
+		queueObj = {
 			queue: [],
 			blockers: [],
 			ajaxQueue: [],
-			lowerLimit: 0,
-			ajaxDownloads: 0,
-			// set a default limit for AJAX paralel downloads
-			ajaxDownloadsLimit: 4
+			lowerBound: 0,
+			activeAjaxDownloads: 0
 		},
+		// create a queue item object and set up it's default values
+		itemObj = {
+			index: 0,
+			errorThrown: NULL,
+			processed: 0,
+			content: '',
+			node: NULL,
+			settings: NULL
+		},
+		// set a global queue variable
+		globalQueue = NULL,
 
-	// -- Private methods ------------------------------------------------------
+	// -- Private functions ----------------------------------------------------
 
 		/**
 		 * Find out whether the XMLHttpRequest method is defined for actual browser.
 		 * If not, try to use browser specific one.
 		 *
 		 * @returns a constructor function for the XMLHttpRequest object or undefined when the browser doesn't support it.
+		 * @type Function
 		 * @private
 		 */
 		XMLHttpRequest = (function () {
-			if (typeof window.XMLHttpRequest === 'function') {
+			if (typeof global.XMLHttpRequest === 'function') {
 				return function () {
-					return new window.XMLHttpRequest();
+					return new global.XMLHttpRequest();
 				};
-			} else if (typeof window.ActiveXObject === 'function') {
+			} else if (typeof global.ActiveXObject === 'function') {
 				return function () {
-					return new window.ActiveXObject('Microsoft.XMLHTTP');
+					return new global.ActiveXObject('Microsoft.XMLHTTP');
 				};
 			} else {
-				return undefined;
+				return NULL;
 			}
 		}()),
 
 		/**
-		 * Replace array's native indexOf method in case the native one's missing.
-		 *
-		 * @returns a inArray function miming the Array's indexOf method functionality.
-		 * @type Function
-		 * @private
-		 */
-		inArray = (function () {
-			if (Array.indexOf) {
-				return function inArray (elem, array) {
-					return array.indexOf(elem);
-				};
-			} else {
-				return function inArray (elem, array) {
-					var i = array.length;
-					while (i) {
-						if ( array[i - 1] === elem) {
-							return (i - 1);
-						}
-						i -= 1;
-					}
-					return -1;
-				};
-			}
-		}()),
-		
-		/**
-		 * Create extended custom object with a specified prototype objects,
-		 * allow changing only properties defined in customPublic object.
-		 *
-		 * @param {Object} customPublic is a prototype of the extended object. Its values can be changed by user.
-		 * @param {Object} customPrivate is a prototype of the extended object. Its values can't be changed by user.
-		 * @returns a constructor function which creates an object using provided settings.
-		 * @type Function
-		 * @private
-		 */
-		extendCustomObject = function (customPublic, customPrivate) {
-			var base = (function (pub, pvt) {
-					var returnObj = {},
-						customKeys = [],
-						setProtoValue = function (obj, custom) {
-							for (var propertyName in obj) {
-								if (obj.hasOwnProperty(propertyName)) {
-									if (custom) {
-										customKeys.push(propertyName);
-									}
-									returnObj[propertyName] = obj[propertyName];
-								}
-							}
-						};
-					setProtoValue(pvt, FALSE);
-					setProtoValue(pub, TRUE);
-					returnObj.setValue = function (key, value) {
-						if (inArray(key, customKeys) > -1 && typeof this[key] === typeof value) {
-							this[key] = value;
-						}
-					};
-					return returnObj;
-				}(customPublic, customPrivate)),
-				/**
-				 * @constructor
-				 */
-				CustomObject = function CustomObject(customObj) {
-					var propertyName;
-					if (typeof customObj === 'object') {
-						for (propertyName in customObj) {
-							if (customObj.hasOwnProperty(propertyName)) {
-								this.setValue(propertyName, customObj[propertyName]);
-							}
-						}
-					}
-				};
-			// Bind base method to the CustomObject class
-			CustomObject.prototype = base;
-			// replace the original function with a new one expecting custom object as a parameter.
-			extendCustomObject = function (customObj) {
-				return new CustomObject(customObj);
-			};
-		},
-
-		/**
-		 * Breaks down an URL into it's three parts - protocol, host and the relative
+		 * Simple URL parser
 		 *
 		 * @param {String} urlString is any URL string
-		 * @returns Object containing information about protocol, host and the relative chunk of the URL
+		 * @returns Object with three attributes: protocol, host and the relative
 		 * @type Object
 		 * @private
 		 */
 		parseUrl = function parseUrl(urlString) {
-			var domainRegExp = /^(https?:)\/\/([\w\d\.\-_%:@]+)\/?/,
-				tempArray = urlString.replace(/^\s+/, '').replace(/\s+$/, '').split(domainRegExp),
+			var urlRegExp = /^(https?:)\/\/([\w\d\.\-_%:@]+)\/?/,
+				tempArray = urlString.replace(/^\s+/, '').replace(/\s+$/, '').split(urlRegExp),
 				returnObj = {
 					protocol: '',
 					host: '',
@@ -209,8 +131,61 @@ var $XLL = (function (window) {
 			return returnObj;
 		},
 
+		extendObj = function extendObj() {
+			var matchStructure = arguments[0],
+				target = arguments[1],
+				length = arguments.length,
+				i = 2,
+				matchingObj,
+				extend = function(target, extension, matchingObj) {
+					var targetType = typeof target,
+						key, value, matchingValue, valueType;
+					if (targetType !== 'object') {
+						target = {};
+					}
+					for (key in extension) {
+						if (extension.hasOwnProperty(key)) {
+							value = extension[key];
+							valueType = typeof value;
+							if (!matchStructure || typeof matchingValue === valueType) {
+								if (matchStructure) {
+									matchingValue = matchingObj[key];
+								}
+								if (valueType === 'object') {
+									target[key] = extend(target[key], value, matchingValue);
+								} else {
+									target[key] = value;
+								}
+							}
+						}
+					}
+					return target;
+				};
+
+			if (matchStructure) {
+				matchingObj = target;
+				target = arguments[2];
+				i = 3;
+			}
+			for (; i < length; i += 1) {
+				target = extend(target, arguments[i], matchingObj);
+			}
+			return target;
+		},
+
+		customizeObj = function customizeObj(prototypeObj, customObj) {
+			var TempObj = function () {},
+				returnObj;
+			TempObj.prototype = prototypeObj;
+			returnObj = new TempObj();
+			if (customObj) {
+				extendObj(TRUE, prototypeObj, returnObj, customObj);
+			}
+			return returnObj;
+		},
+
 		/**
-		 * Creates and returns a hidden iframe
+		 * Create a hidden iframe, inject it to the page and return a pointer to it
 		 *
 		 * @param {HTMLElement} context element for iframe's injection
 		 * @returns Object which store pointers to the iframe's node and iframe's document
@@ -226,8 +201,8 @@ var $XLL = (function (window) {
 			context.appendChild(iframe);
 			if (iframe.contentDocument) { // modern browsers
 				iframeDoc = iframe.contentDocument;
-			} else if (iframe.contentWindow) { // IE5.5 and IE6
-				iframeDoc = iframe.contentWindow;
+			} else if (iframe.contentglobal) { // IE5.5 and IE6
+				iframeDoc = iframe.contentglobal;
 			}
 			if (iframeDoc && iframeDoc.document) {
 				iframeDoc = iframeDoc.document;
@@ -235,6 +210,8 @@ var $XLL = (function (window) {
 			// return iframe node and its document object
 			return {node: iframe, document: iframeDoc};
 		},
+
+	// -- Private methods ------------------------------------------------------
 
 		/**
 		 * Create a specified HTML element with appropriate attributes.
@@ -244,20 +221,20 @@ var $XLL = (function (window) {
 		 * @type HTMLElement
 		 * @private
 		 */
-		createNode = function createNode(queueItem) {
+		createNode = function createNode() {
 			var doc = document,
 				node = NULL,
-				src = queueItem.src,
-				type = queueItem.type,
-				content = queueItem.content,
-				attributes = queueItem.attributes,
-				attrArray = customAttributes[type],
-				currentAttribute, currentValue, i;
+				that = this,
+				content = that.content,
+				settings = that.settings,
+				src = settings.src,
+				type = settings.type,
+				attributes = settings.attributes,
+				key, value;
 
-			if (type === 'js') {
+			if (type === 'script') {
 				// creates a script node
 				node = doc.createElement('script');
-				node.setAttribute('type', 'text/javascript');
 				if (content > '') {
 					//IE can't append node to the script element
 					if (node.canHaveChildren !== FALSE) {
@@ -283,20 +260,17 @@ var $XLL = (function (window) {
 					node.setAttribute('rel', 'stylesheet');
 					node.setAttribute('href', src);
 				}
-				node.setAttribute('type', 'text/css');
 			}
-			if (attributes && attrArray) {
-				i = attrArray.length;
-				while (i) {
-					currentAttribute = attrArray[i - 1];
-					currentValue = attributes[currentAttribute];
-					if (currentValue !== undefined) {
-						node.setAttribute(currentAttribute, currentValue);
+			for (key in attributes) {
+				if (attributes.hasOwnProperty(key)) {
+					value = attributes[key];
+					if (value > '') {
+						node.setAttribute(key, value);
 					}
-					i -= 1;
 				}
 			}
-			return node;
+			that.node = node;
+			return that;
 		},
 
 		/**
@@ -306,42 +280,45 @@ var $XLL = (function (window) {
 		 * @param {Function} callback (optional) callback function to execute when the resource is loaded
 		 * @private
 		 */
-		xhrload = function xhrload(queueItem, callback) {
+		xhrload = function xhrload(callback) {
 			var xhr,
-				win = window,
+				win = global,
+				that = this,
 				asyncTimeout;
 
 			// test whether the XMLHttpRequest is defined and queueItem variable is an object
 			if (XMLHttpRequest) {
 				xhr = new XMLHttpRequest();
-				queueItem.loadError = 2;
+				that.errorThrown = 2;
 				// timeout for requests over an unreliable network
 				asyncTimeout = win.setTimeout(function () {
 					xhr.abort();
-					callback(queueItem);
-				}, queueItem.timeout);
+					callback(that);
+				}, that.timeout);
 				xhr.onreadystatechange = function () {
 					var status = xhr.status;
 					// readyState 4 menas complete
 					if (xhr.readyState === 4) {
 						win.clearTimeout(asyncTimeout);
 						if (status >= 200 && status < 300 || status === 304) {
-							queueItem.content = xhr.responseText;
-							queueItem.loadError = 0;
+							that.content = xhr.responseText;
+							that.errorThrown = NULL;
 						// something went wrong with XMLHttpRequest
 						} else if (status === 0) {
-							queueItem.loadError = 1;
+							that.errorThrown = 1;
 						}
-						callback(queueItem);
+						callback(that);
 					}
 				};
-				xhr.open('GET', queueItem.src, TRUE);
+				xhr.open('GET', that.src, TRUE);
 				xhr.send(NULL);
 			} else {
 				// the XMLHttpRequest is not defined
-				queueItem.loadError = 1;
-				callback(queueItem);
+				customDefaults.ajax = FALSE;
+				that.errorThrown = 1;
+				callback(that);
 			}
+			return that;
 		},
 
 		/**
@@ -353,23 +330,24 @@ var $XLL = (function (window) {
 		 * @private
 		 */
 		load = function load(callback) {
-			var that = this;
+			var that = this,
+				settings = that.settings;
 			// try to load the asset using ajax
-			if (this.ajax) {
-				xhrload(this, function (queueItem) {
-					// ajax call returns loadError equal to 1 when the assets are situated on a different server
-					if (queueItem.loadError === 1 && !queueItem.hasOwnProperty('ajax')) {
+			if (settings.ajax) {
+				that.xhrload(function (queueItem) {
+					// ajax call returns errorThrown equal to 1 when the assets are situated on a different server
+					if (that.errorThrown === 1 && !settings.hasOwnProperty('ajax')) {
 						// in case the user doesn't set the ajax attribute try to load it again without using ajax
-						queueItem.loadError = 0;
-						queueItem.ajax = FALSE;
+						that.errorThrown = NULL;
+						settings.ajax = FALSE;
 					}
-					callback(queueItem);
+					callback(that);
 				});
 			// load the asset without using ajax
 			} else {
 				callback(that);
 			}
-			return this;
+			return that;
 		},
 
 		/**
@@ -380,9 +358,10 @@ var $XLL = (function (window) {
 		 * @private
 		 */
 		addEventListener = (function () {
-			if (typeof window.addEventListener === 'function') {
-				return function addEventListener(queueItem, callback) {
-					var currentNode = queueItem.node,
+			if (typeof global.addEventListener === 'function') {
+				return function addEventListener(callback) {
+					var that = this,
+						currentNode = that.node,
 						iframeDocument;
 					if (currentNode.node) {
 						currentNode = currentNode.node;
@@ -390,48 +369,51 @@ var $XLL = (function (window) {
 					}
 					// and create onload event
 					currentNode.addEventListener('load', function XLLload() {
-						var	isTypeCss = queueItem.type === 'css',
+						var	isTypeCss = that.type === 'css',
 							loadedStyleSheet, rules;
 						if (isTypeCss && iframeDocument) {
 							loadedStyleSheet = iframeDocument.styleSheets[0];
 							rules = loadedStyleSheet.cssRules;
 							if (!rules || rules.length === 0) {
-								queueItem.loadError = 3;
+								that.errorThrown = 3;
 							}
 						} else if (isTypeCss) {
-							queueItem.loadError = 3;
+							that.errorThrown = 3;
 						}
-						callback(queueItem);
+						callback(that);
 					}, FALSE);
 					// in case of having problems with loading the linked file
 					currentNode.addEventListener('error', function XLLerror() {
-						queueItem.loadError = 3;
-						callback(queueItem);
+						that.errorThrown = 3;
+						callback(that);
 					}, FALSE);
+					return that;
 				};
-			} else if (window.attachEvent) {
-				return function addEventListener(queueItem, callback) {
-					var currentNode = queueItem.node;
+			} else if (global.attachEvent) {
+				return function addEventListener(callback) {
+					var that = this,
+						currentNode = that.node;
 					// onload event for IE, unfortunately the readyState is equal to loaded even in case of error occurrence
 					currentNode.attachEvent('onreadystatechange', function () {
-						var currentNode = queueItem.node,
+						var currentNode = this,
 							readyState = currentNode.readyState,
 							loadedStyleSheet, rules;
 						if (readyState === 'loaded' || readyState === 'complete') {
 							currentNode.onreadystatechange = NULL;
-							if (queueItem.type === 'css') {
+							if (that.type === 'css') {
 								loadedStyleSheet = currentNode.styleSheet;
 								rules = loadedStyleSheet.rules;
 								if (!rules || rules.length === 0) {
-									queueItem.loadError = 3;
+									that.errorThrown = 3;
 								}
 							}
-							callback(queueItem);
+							callback(that);
 						}
 					});
+					return that;
 				};
 			} else {
-				return undefined;
+				return NULL;
 			}
 		}()),
 
@@ -443,15 +425,18 @@ var $XLL = (function (window) {
 		 * @param {Function} callback (optional) callback function to execute when the nodes are injected.
 		 * @private
 		 */
-		injectToDOM = function injectToDOM(queueItemsArray, callback) {
-			var win = window,
+		injectToDOM = function injectToDOM(callback) {
+			var win = global,
 				doc = win.document,
+				that = this,
+				queueItemsArray = that.queue,
 				queueItemsArrayLen = queueItemsArray.length,
 				itemsToProceed = queueItemsArrayLen,
 				fragment = doc.createDocumentFragment(),
 				fragmentInjected = FALSE,
 				syncTimeout = [],
-				iframeNode, iframeDocument, queueItem, currentNode, i,
+				i = 0,
+				iframeNode, iframeDocument, queueItem, currentNode,
 				headElement = doc.getElementsByTagName('head')[0],
 				bodyElement = doc.getElementsByTagName('body')[0],
 				// function which is called after the node's injection
@@ -459,7 +444,7 @@ var $XLL = (function (window) {
 					if (queueItem) {
 						win.clearTimeout(syncTimeout[queueItem.index]);
 						if (iframeDocument) {
-							if (!queueItem.loadError) {
+							if (!queueItem.errorThrown) {
 								queueItem.node = iframeDocument.getElementsByTagName('link')[0];
 								headElement.appendChild(queueItem.node);
 							} else {
@@ -477,12 +462,12 @@ var $XLL = (function (window) {
 				},
 				onTimeout = function (queueItem) {
 					return function onTimeout() {
-						queueItem.loadError = TRUE;
+						queueItem.errorThrown = 3;
 						onLoadComplete(queueItem);
 					};
 				};
 
-			for (i = 0; i < queueItemsArrayLen; i += 1) {
+			for (; i < queueItemsArrayLen; i += 1) {
 				queueItem = queueItemsArray[i];
 				currentNode = createNode(queueItem);
 				// after the period fires error event so the rest of the queue can be processed in case it's being held by event firing issue
@@ -519,7 +504,7 @@ var $XLL = (function (window) {
 			headElement.appendChild(fragment);
 			fragmentInjected = TRUE;
 			onLoadComplete();
-			//return this;
+			return that;
 		},
 
 		/**
@@ -532,52 +517,53 @@ var $XLL = (function (window) {
 		 */
 		queuePush = function queuePush(queueItem) {
 			var that = this,
-				queue = this.queue,
-				src = queueItem.src,
+				queue = that.queue,
 				index = queue.length,
-				currentUrl = window.location,
+				settings = queueItem.settings,
+				src = settings.src,
+				currentUrl = global.location,
 				currentDomain = currentUrl.protocol + currentUrl.host,
 				parsedUrl, parsedDomain, ajax;
 
 			if (src > '') {
 				// set the actual index
 				queueItem.index = index;
-				if (!queueItem.hasOwnProperty('ajax')) {
+				if (!settings.hasOwnProperty('ajax')) {
 					parsedUrl = parseUrl(src);
 					parsedDomain = parsedUrl.protocol + parsedUrl.host;
 					if (parsedDomain > '' && parsedDomain !== currentDomain) {
-						queueItem.ajax = FALSE;
+						settings.ajax = FALSE;
 					}
 				}
 			} else {
-				queueItem.ajax = FALSE;
+				settings.ajax = FALSE;
 			}
-			ajax = queueItem.ajax;
+			ajax = settings.ajax;
 			// push current item in the queue
 			queue.push(queueItem);
-			if (queueItem.fixOrder) {
-				this.blockers.push(index);
+			if (!settings.async) {
+				that.blockers.push(index);
 			}
-			if (!ajax || this.ajaxDownloads < this.ajaxDownloadsLimit) {
+			if (!ajax || that.activeAjaxDownloads < settings.asyncAjaxDownloads) {
 				if (ajax) {
-					this.ajaxDownloads += 1;
+					that.activeAjaxDownloads += 1;
 				}
 				queueItem.load(function ajaxLoad(queueItem) {
 					var ajaxQueue = that.ajaxQueue;
 					queueItem.processed = 1;
-					if (queueItem.ajax) {
+					if (queueItem.settings.ajax) {
 						that.queuePop(queueItem);
 						if (ajaxQueue.length > 0) {
 							queue[ajaxQueue.shift()].load(ajaxLoad);
 						} else {
-							that.ajaxDownloads -= 1;
+							that.activeAjaxDownloads -= 1;
 						}
 					}
 				});
 			} else {
-				this.ajaxQueue.push(index);
+				that.ajaxQueue.push(index);
 			}
-			return this;
+			return that;
 		},
 
 		/**
@@ -590,10 +576,11 @@ var $XLL = (function (window) {
 		 */
 		queuePop = function queuePop(queueItem) {
 			var that = this,
-				blockers = this.blockers,
-				queue = this.queue,
-				processQueue = [],
-				i = this.lowerLimit,
+				blockers = that.blockers,
+				queue = that.queue,
+				processQueueObj = customizeObj(queueObj),
+				processQueue = processQueueObj.queue,
+				i = that.lowerBound,
 				upperLimit = queue.length - 1,
 				currentItem;
 				
@@ -615,23 +602,23 @@ var $XLL = (function (window) {
 				i += 1;
 			}
 			if (processQueue.length > 0) {
-				injectToDOM(processQueue, function (queueItemsArray) {
+				processQueueObj.injectToDOM(function (queueItemsArray) {
 					var globalQueue = that,
 						queueLen = queueItemsArray.length,
 						blockerResolved = FALSE,
 						queueItem, i;
 					for (i = 0; i < queueLen; i += 1) {
 						queueItem = queueItemsArray[i];
-						if (queueItem.loadError === 0) {
-							if (queueItem.fixOrder) {
+						if (!queueItem.errorThrown) {
+							if (!queueItem.async) {
 								blockers.shift();
 								blockerResolved = TRUE;
 							}
 							queueItem.processed = 3;
-							if ((globalQueue.lowerLimit + 1) === queueItem.index) {
-								globalQueue.lowerLimit += 1;
+							if ((globalQueue.lowerBound + 1) === queueItem.index) {
+								globalQueue.lowerBound += 1;
 							}
-							queueItem.callback();
+							queueItem.success();
 						} else {
 							queueItem.error();
 						}
@@ -641,17 +628,18 @@ var $XLL = (function (window) {
 					}
 				});
 			}
-			return this;
+			return that;
 		};
 
 	// -- One-time init procedures ---------------------------------------------
-
-	// bind the load method to the properties object
-	customProperties.pvt.load = load;
-	// first run of the extend custom object method which sets up default values and rewrite the function for a later use
-	extendCustomObject(customProperties.pub, customProperties.pvt);
-	globalQueue.queuePush = queuePush;
-	globalQueue.queuePop = queuePop;
+	itemObj.load = load;
+	itemObj.xhrload = xhrload;
+	itemObj.createNode = createNode;
+	itemObj.addEventListener = addEventListener;
+	queueObj.queuePush = queuePush;
+	queueObj.queuePop = queuePop;
+	queueObj.injectToDOM = injectToDOM;
+	globalQueue = customizeObj(queueObj);
 
 	// -- Public API -----------------------------------------------------------
 	return {
@@ -663,27 +651,56 @@ var $XLL = (function (window) {
 		 * @type Object
 		 * @public
 		 */
-		load: function load(options) {
+		load: function load(settings) {
 			var queueItem;
 			// extend user parameters object with default parameters, remove all unexpected values from the object
-			if (typeof options === 'object') {
-				queueItem = extendCustomObject(options);
+			if (typeof settings === 'object') {
+				queueItem = customizeObj(itemObj);
+				queueItem.settings = customizeObj(customDefaults, settings);
+				console.log(queueItem);
 				globalQueue.queuePush(queueItem);
 				if (globalQueue.queue.length === 1) {
-					window.setTimeout(function () {
+					global.setTimeout(function () {
 						globalQueue.queuePop();
 					}, 25);
 				}
 			}
-			// return this makes the chaining works
 			return this;
 		},
-		/**
-		 * The exec is another global API's method which points to the load method.
-		 * Basicaly it's just a new name, but the same functionality
-		 * 
-		 * @public
-		 */
-		exec: load
+		defaults: function defaults (settings) {
+			return this;
+		},
+		script: function script(src, callback, error) {
+			$XLL.load({
+				src: src,
+				callback: callback,
+				error: error,
+				type: 'script',
+				attributes: {
+					type: 'text/javascript'
+				}
+			});
+			return this;
+		},
+		css: function css(src, callback, error) {
+			$XLL.load({
+				src: src,
+				callback: callback,
+				error: error,
+				type: 'css',
+				attributes: {
+					type: 'text/css'
+				}
+			});
+			return this;
+		},
+		wait: function wait(callback) {
+			$XLL.load({
+				async: FALSE,
+				callback: callback,
+				type: 'wait'
+			});
+			return this;
+		}
 	};
 }(this));
