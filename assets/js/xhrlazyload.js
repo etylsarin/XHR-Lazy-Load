@@ -1,6 +1,6 @@
 /**
  * @fileoverview xhr lazy loading script
- * @version 1.0.0b (28-FEB-2011)
+ * @version 1.0.0b (01-MAR-2011)
  * @author Filip Mares - http:// www.filip-mares.co.uk/
  *
  * Dual licensed under the MIT and GPL licenses:
@@ -300,35 +300,6 @@ var $XLL = (function (global) {
 		},
 
 		/**
-		 * Handle the loading of an asset
-		 *
-		 * @param {Function} callback (optional) callback function to execute when the asset is loaded
-		 * @returns updated method's owner object
-		 * @type Object
-		 * @private
-		 */
-		load = function load(callback) {
-			var that = this,
-				settings = that.settings;
-			// try to load the asset using ajax
-			if (settings.ajax) {
-				that.xhrload(function (queueItem) {
-					// ajax call returns errorThrown equal to 1 when the assets are situated on a different server
-					if (that.errorThrown === 1 && !settings.hasOwnProperty('ajax')) {
-						// in case the user doesn't set the ajax attribute try to load it again without using ajax
-						that.errorThrown = NULL;
-						settings.ajax = FALSE;
-					}
-					callback(that);
-				});
-			// load the asset without using ajax
-			} else {
-				callback(that);
-			}
-			return that;
-		},
-
-		/**
 		 * Choose the browser's native event handling method and return it for the next usage.
 		 *
 		 * @returns event handling method for actual browser
@@ -336,7 +307,7 @@ var $XLL = (function (global) {
 		 * @private
 		 */
 		addEventListener = (function () {
-			if (typeof global.addEventListener === 'function') {
+			if (global.addEventListener) {
 				return function addEventListener(callback) {
 					var that = this,
 						currentNode = that.node,
@@ -431,8 +402,6 @@ var $XLL = (function (global) {
 							bodyElement.removeChild(iframeNode);
 						}
 						itemsToProceed -= 1;
-					} else {
-						
 					}
 					if (fragmentInjected && itemsToProceed === 0) {
 						callback(queueItemsArray);
@@ -448,35 +417,37 @@ var $XLL = (function (global) {
 			for (; i < queueItemsArrayLen; i += 1) {
 				queueItem = queueItemsArray[i];
 				settings = queueItem.settings;
-				currentNode = queueItem.createNode().node;
-				// after the period fires error event so the rest of the queue can be processed in case it's being held by event firing issue
-				syncTimeout[queueItem.index] = win.setTimeout(onTimeout(queueItem), settings.timeout);
-				// if the asset has been downloaded by ajax simply inject the node into the head of a page
-				if (settings.ajax) {
-					fragment.appendChild(currentNode);
-					queueItem.node = currentNode;
-					onLoadComplete(queueItem);
-				// otherwise test the asset's type
-				} else {
-					// IE doesn't support addEventListener up to version 9
-					if (settings.type === 'css' && win.addEventListener === 'function') {
-						// if the type is css it is neccessary to create an iframe because link tag has no onload event by its own
-						iframeNode = createIframe(bodyElement);
-						queueItem.node = iframeNode;
-						iframeDocument = iframeNode.document;
-						iframeNode = iframeNode.node;
-						// Inject the assets to the iframe
-						iframeDocument.open();
-						iframeDocument.getElementsByTagName('head')[0].appendChild(currentNode);
-						iframeDocument.close();
-						currentNode = iframeNode;
-					// in case of js file or IE browser simply add the assets to the head of a page
-					} else {
+				if (settings.type !== 'wait') {
+					currentNode = queueItem.createNode().node;
+					// after the period fires error event so the rest of the queue can be processed in case it's being held by event firing issue
+					syncTimeout[queueItem.index] = win.setTimeout(onTimeout(queueItem), settings.timeout);
+					// if the asset has been downloaded by ajax simply inject the node into the head of a page
+					if (settings.ajax) {
 						fragment.appendChild(currentNode);
 						queueItem.node = currentNode;
-					}
-					if (addEventListener) {
-						queueItem.addEventListener(onLoadComplete);
+						onLoadComplete(queueItem);
+					// otherwise test the asset's type
+					} else {
+						// IE doesn't support addEventListener up to version 9
+						if (settings.type === 'css' && win.addEventListener === 'function') {
+							// if the type is css it is neccessary to create an iframe because link tag has no onload event by its own
+							iframeNode = createIframe(bodyElement);
+							queueItem.node = iframeNode;
+							iframeDocument = iframeNode.document;
+							iframeNode = iframeNode.node;
+							// Inject the assets to the iframe
+							iframeDocument.open();
+							iframeDocument.getElementsByTagName('head')[0].appendChild(currentNode);
+							iframeDocument.close();
+							currentNode = iframeNode;
+						// in case of js file or IE browser simply add the assets to the head of a page
+						} else {
+							fragment.appendChild(currentNode);
+							queueItem.node = currentNode;
+						}
+						if (addEventListener) {
+							queueItem.addEventListener(onLoadComplete);
+						}
 					}
 				}
 			}
@@ -524,21 +495,27 @@ var $XLL = (function (global) {
 				that.blockers.push(index);
 			}
 			if (!ajax || that.activeAjaxDownloads < settings.asyncAjaxDownloads) {
+				queueItem.processed = 1;
 				if (ajax) {
 					that.activeAjaxDownloads += 1;
-				}
-				queueItem.load(function ajaxLoad(queueItem) {
-					var ajaxQueue = that.ajaxQueue;
-					queueItem.processed = 1;
-					if (queueItem.settings.ajax) {
-						that.queuePop(queueItem);
+					queueItem.xhrload(function ajaxLoad(queueItem) {
+						var settings = queueItem.settings,
+							queueObj = that,
+							ajaxQueue = queueObj.ajaxQueue;
+						// ajax call returns errorThrown equal to 1 when the assets are situated on a different server
+						if (queueItem.errorThrown === 1 && !settings.hasOwnProperty('ajax')) {
+							// in case the user doesn't set the ajax attribute try to load it again without using ajax
+							queueItem.errorThrown = NULL;
+							settings.ajax = FALSE;
+						}
+						queueObj.queuePop(queueItem);
 						if (ajaxQueue.length > 0) {
-							queue[ajaxQueue.shift()].load(ajaxLoad);
+							queueObj.queue[ajaxQueue.shift()].xhrload(ajaxLoad);
 						} else {
 							that.activeAjaxDownloads -= 1;
 						}
-					}
-				});
+					});
+				}
 			} else {
 				that.ajaxQueue.push(index);
 			}
@@ -613,7 +590,6 @@ var $XLL = (function (global) {
 
 	// -- One-time init procedures ---------------------------------------------
 	QueueItem.prototype = {
-		load: load,
 		xhrload: xhrload,
 		createNode: createNode,
 		addEventListener: addEventListener
