@@ -1,6 +1,6 @@
 /**
  * @fileoverview xhr lazy loading script
- * @version 1.0.0b (09-MAR-2011)
+ * @version 1.0.1b (09-MAR-2011)
  * @author Filip Mares - http:// www.filip-mares.co.uk/
  *
  * Dual licensed under the MIT and GPL licenses:
