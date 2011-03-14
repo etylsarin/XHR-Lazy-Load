@@ -8,7 +8,7 @@
 </head>
 <body>
 	<h1>XHR Lazy Load example page</h1>
-	<script type="text/javascript" src="assets/js/xhrlazyload.js"></script>
+	<script type="text/javascript" src="../lib/xhrlazyload.js"></script>
 	<script type="text/javascript">
 		if (typeof $XLL === 'object') {
 			$XLL.load({src : 'http://ajax.googleapis.com/ajax/libs/jquery/1.4/jquery.min.js', async: false, ajax: false, success: function () {alert('jquery.min.js callback works!');}, error: function () {alert('jquery.min.js loading error occured!');}})
